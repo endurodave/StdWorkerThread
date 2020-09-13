@@ -25,47 +25,47 @@ Originally published on CodeProject at: <a href="http://www.codeproject.com/Arti
 class WorkerThread
 {
 public:
-    /// Constructor
-    WorkerThread(const char* threadName);
+&nbsp; &nbsp; /// Constructor
+&nbsp; &nbsp; WorkerThread(const char* threadName);
 
-    /// Destructor
-    ~WorkerThread();
+&nbsp; &nbsp; /// Destructor
+&nbsp; &nbsp; ~WorkerThread();
 
-    /// Called once to create the worker thread
-    /// @return TRUE if thread is created. FALSE otherwise.
-    bool CreateThread();
+&nbsp; &nbsp; /// Called once to create the worker thread
+&nbsp; &nbsp; /// @return True if thread is created. False otherwise.&nbsp;
+&nbsp; &nbsp; bool CreateThread();
 
-    /// Called once a program exit to exit the worker thread
-    void ExitThread();
+&nbsp; &nbsp; /// Called once a program exit to exit the worker thread
+&nbsp; &nbsp; void ExitThread();
 
-    /// Get the ID of this thread instance
-    /// @return The worker thread ID
-    std::thread::id GetThreadId();
+&nbsp; &nbsp; /// Get the ID of this thread instance
+&nbsp; &nbsp; /// @return The worker thread ID
+&nbsp; &nbsp; std::thread::id GetThreadId();
 
-    /// Get the ID of the currently executing thread
-    /// @return The current thread ID
-    static std::thread::id GetCurrentThreadId();
+&nbsp; &nbsp; /// Get the ID of the currently executing thread
+&nbsp; &nbsp; /// @return The current thread ID
+&nbsp; &nbsp; static std::thread::id GetCurrentThreadId();
 
-    /// Add a message to thread queue.
-    /// @param[in] data - thread specific information created on the heap using operator new.
-    void PostMsg(const UserData* data);
+&nbsp; &nbsp; /// Add a message to the thread queue
+&nbsp; &nbsp; /// @param[in] data - thread specific message information
+&nbsp; &nbsp; void PostMsg(std::shared_ptr&lt;UserData&gt; msg);
 
 private:
-    WorkerThread(const WorkerThread&amp;);
-    WorkerThread&amp; operator=(const WorkerThread&amp;);
+&nbsp; &nbsp; WorkerThread(const WorkerThread&amp;) = delete;
+&nbsp; &nbsp; WorkerThread&amp; operator=(const WorkerThread&amp;) = delete;
 
-    /// Entry point for the worker thread
-    void Process();
+&nbsp; &nbsp; /// Entry point for the worker thread
+&nbsp; &nbsp; void Process();
 
-    /// Entry point for timer thread
-    void TimerThread();
+&nbsp; &nbsp; /// Entry point for timer thread
+&nbsp; &nbsp; void TimerThread();
 
-    std::thread* m_thread;
-    std::queue&lt;ThreadMsg*&gt; m_queue;
-    std::mutex m_mutex;
-    std::condition_variable m_cv;
-    std::atomic&lt;bool&gt; m_timerExit;
-    const char* THREAD_NAME;
+&nbsp; &nbsp; std::unique_ptr&lt;std::thread&gt; m_thread;
+&nbsp; &nbsp; std::queue&lt;std::shared_ptr&lt;ThreadMsg&gt;&gt; m_queue;
+&nbsp; &nbsp; std::mutex m_mutex;
+&nbsp; &nbsp; std::condition_variable m_cv;
+&nbsp; &nbsp; std::atomic&lt;bool&gt; m_timerExit;
+&nbsp; &nbsp; const char* THREAD_NAME;
 };</pre>
 
 <p>The first thing to notice is that <code>std::thread </code>is used to create a main worker thread. The main worker thread function is <code>Process()</code>.</p>
@@ -85,84 +85,68 @@ bool WorkerThread::CreateThread()
 <pre lang="C++">
 void WorkerThread::Process()
 {
-    m_timerExit = false;
-    std::thread timerThread(&amp;WorkerThread::TimerThread, this);
+&nbsp; &nbsp; m_timerExit = false;
+&nbsp; &nbsp; std::thread timerThread(&amp;WorkerThread::TimerThread, this);
 
-    while (1)
-    {
-        ThreadMsg* msg = 0;
-        {
-            // Wait for a message to be added to the queue
-            std::unique_lock&lt;std::mutex&gt; lk(m_mutex);
-            while (m_queue.empty())
-                m_cv.wait(lk);
+&nbsp;&nbsp; &nbsp;while (1)
+&nbsp;&nbsp; &nbsp;{
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;std::shared_ptr&lt;ThreadMsg&gt; msg;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;{
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;// Wait for a message to be added to the queue
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;std::unique_lock&lt;std::mutex&gt; lk(m_mutex);
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;while (m_queue.empty())
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;m_cv.wait(lk);
 
-            if (m_queue.empty())
-                continue;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;if (m_queue.empty())
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;continue;
 
-            msg = m_queue.front();
-            m_queue.pop();
-        }
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;msg = m_queue.front();
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;m_queue.pop();
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;}
 
-        switch (msg-&gt;id)
-        {
-            case MSG_POST_USER_DATA:
-            {
-                ASSERT_TRUE(msg-&gt;msg != NULL);
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;switch (msg-&gt;id)
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;{
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;case MSG_POST_USER_DATA:
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;{
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;ASSERT_TRUE(msg-&gt;msg != NULL);
 
-                // Convert the ThreadMsg void* data back to a UserData*
-                const UserData* userData = static_cast&lt;const UserData*&gt;(msg-&gt;msg);
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; auto userData = std::static_pointer_cast&lt;UserData&gt;(msg-&gt;msg);
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; cout &lt;&lt; userData-&gt;msg.c_str() &lt;&lt; &quot; &quot; &lt;&lt; userData-&gt;year &lt;&lt; &quot; on &quot; &lt;&lt; THREAD_NAME &lt;&lt; endl;
 
-                cout &lt;&lt; userData-&gt;msg.c_str() &lt;&lt; &quot; &quot; &lt;&lt; userData-&gt;year &lt;&lt; &quot; on &quot; &lt;&lt; THREAD_NAME &lt;&lt; endl;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;break;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;}
 
-                // Delete dynamic data passed through message queue
-                delete userData;
-                delete msg;
-                break;
-            }
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; case MSG_TIMER:
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; cout &lt;&lt; &quot;Timer expired on &quot; &lt;&lt; THREAD_NAME &lt;&lt; endl;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; break;
 
-            case MSG_TIMER:
-                cout &lt;&lt; &quot;Timer expired on &quot; &lt;&lt; THREAD_NAME &lt;&lt; endl;
-                delete msg;
-                break;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;case MSG_EXIT_THREAD:
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;{
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; m_timerExit = true;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; timerThread.join();
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; return;
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;}
 
-            case MSG_EXIT_THREAD:
-            {
-                m_timerExit = true;
-                timerThread.join();
-
-                delete msg;
-                std::unique_lock&lt;std::mutex&gt; lk(m_mutex);
-                while (!m_queue.empty())
-                {
-                    msg = m_queue.front();
-                    m_queue.pop();
-                    delete msg;
-                }
-
-                cout &lt;&lt; &quot;Exit thread on &quot; &lt;&lt; THREAD_NAME &lt;&lt; endl;
-                return;
-            }
-
-            default:
-                ASSERT();
-        }
-    }
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;default:
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;ASSERT();
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;}
+&nbsp;&nbsp; &nbsp;}
 }</pre>
 
 <p><code>PostMsg() </code>creates a new <code>ThreadMsg </code>on the heap, adds the message to the queue, and then notifies the worker thread using a condition variable.</p>
 
 <pre lang="C++">
-void WorkerThread::PostMsg(const UserData* data)
+void WorkerThread::PostMsg(std::shared_ptr&lt;UserData&gt; data)
 {
-    ASSERT_TRUE(m_thread);
+&nbsp;&nbsp; &nbsp;ASSERT_TRUE(m_thread);
 
-    ThreadMsg* threadMsg = new ThreadMsg(MSG_POST_USER_DATA, data);
+&nbsp;&nbsp; &nbsp;// Create a new ThreadMsg
+&nbsp; &nbsp; std::shared_ptr&lt;ThreadMsg&gt; threadMsg(new ThreadMsg(MSG_POST_USER_DATA, data));
 
-    // Add user data msg to queue and notify worker thread
-    std::unique_lock&lt;std::mutex&gt; lk(m_mutex);
-    m_queue.push(threadMsg);
-    m_cv.notify_one();
+&nbsp;&nbsp; &nbsp;// Add user data msg to queue and notify worker thread
+&nbsp;&nbsp; &nbsp;std::unique_lock&lt;std::mutex&gt; lk(m_mutex);
+&nbsp;&nbsp; &nbsp;m_queue.push(threadMsg);
+&nbsp;&nbsp; &nbsp;m_cv.notify_one();
 }</pre>
 
 <p>The loop will continue to process messages until the <code>MSG_EXIT_THREAD </code>is received and the thread exits.</p>
@@ -170,22 +154,21 @@ void WorkerThread::PostMsg(const UserData* data)
 <pre lang="C++">
 void WorkerThread::ExitThread()
 {
-    if (!m_thread)
-        return;
+&nbsp;&nbsp; &nbsp;if (!m_thread)
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;return;
 
-    // Create a new ThreadMsg
-    ThreadMsg* threadMsg = new ThreadMsg(MSG_EXIT_THREAD, 0);
+&nbsp;&nbsp; &nbsp;// Create a new ThreadMsg
+&nbsp;&nbsp; &nbsp;std::shared_ptr&lt;ThreadMsg&gt; threadMsg(new ThreadMsg(MSG_EXIT_THREAD, 0));
 
-    // Put exit thread message into the queue
-    {
-        lock_guard&lt;mutex&gt; lock(m_mutex);
-        m_queue.push(threadMsg);
-        m_cv.notify_one();
-    }
+&nbsp;&nbsp; &nbsp;// Put exit thread message into the queue
+&nbsp;&nbsp; &nbsp;{
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;lock_guard&lt;mutex&gt; lock(m_mutex);
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;m_queue.push(threadMsg);
+&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;m_cv.notify_one();
+&nbsp;&nbsp; &nbsp;}
 
-    m_thread-&gt;join();
-    delete m_thread;
-    m_thread = 0;
+&nbsp; &nbsp; m_thread-&gt;join();
+&nbsp; &nbsp; m_thread = nullptr;
 }</pre>
 
 <h3>Event Loop (Win32)</h3>
@@ -252,18 +235,18 @@ void WorkerThread::Process()
 <pre lang="C++">
 void WorkerThread::TimerThread()
 {
-    while (!m_timerExit)
-    {
-        // Sleep for 250ms then put a MSG_TIMER message into queue
-        std::this_thread::sleep_for(250ms);
+&nbsp; &nbsp; while (!m_timerExit)
+&nbsp; &nbsp; {
+&nbsp; &nbsp; &nbsp; &nbsp; // Sleep for 250mS then put a MSG_TIMER into the message queue
+&nbsp; &nbsp; &nbsp; &nbsp; std::this_thread::sleep_for(250ms);
 
-        ThreadMsg* threadMsg = new ThreadMsg(MSG_TIMER, 0);
+&nbsp; &nbsp; &nbsp; &nbsp; std::shared_ptr&lt;ThreadMsg&gt; threadMsg (new ThreadMsg(MSG_TIMER, 0));
 
-        // Add timer msg to queue and notify worker thread
-        std::unique_lock&lt;std::mutex&gt; lk(m_mutex);
-        m_queue.push(threadMsg);
-        m_cv.notify_one();
-    }
+&nbsp; &nbsp; &nbsp; &nbsp; // Add timer msg to queue and notify worker thread
+&nbsp; &nbsp; &nbsp; &nbsp; std::unique_lock&lt;std::mutex&gt; lk(m_mutex);
+&nbsp; &nbsp; &nbsp; &nbsp; m_queue.push(threadMsg);
+&nbsp; &nbsp; &nbsp; &nbsp; m_cv.notify_one();
+&nbsp; &nbsp; }
 }</pre>
 
 <h2>Usage</h2>
@@ -276,39 +259,37 @@ WorkerThread workerThread1(&quot;WorkerThread1&quot;);
 WorkerThread workerThread2(&quot;WorkerThread2&quot;);
 
 int main(void)
-{  
-    // Create worker threads
-    workerThread1.CreateThread();
-    workerThread2.CreateThread();
+{&nbsp;&nbsp; &nbsp;
+&nbsp;&nbsp; &nbsp;// Create worker threads
+&nbsp;&nbsp; &nbsp;workerThread1.CreateThread();
+&nbsp;&nbsp; &nbsp;workerThread2.CreateThread();
 
-    // Create message to send to worker thread 1
-    UserData* userData1 = new UserData();
-    userData1-&gt;msg = &quot;Hello world&quot;;
-    userData1-&gt;year = 2017;
+&nbsp;&nbsp; &nbsp;// Create message to send to worker thread 1
+&nbsp;&nbsp; &nbsp;std::shared_ptr&lt;UserData&gt; userData1(new UserData());
+&nbsp;&nbsp; &nbsp;userData1-&gt;msg = &quot;Hello world&quot;;
+&nbsp;&nbsp; &nbsp;userData1-&gt;year = 2017;
 
-    // Post the message to worker thread 1
-    workerThread1.PostMsg(userData1);
+&nbsp;&nbsp; &nbsp;// Post the message to worker thread 1
+&nbsp;&nbsp; &nbsp;workerThread1.PostMsg(userData1);
 
-    // Create message to send to worker thread 2
-    UserData* userData2 = new UserData();
-    userData2-&gt;msg = &quot;Goodbye world&quot;;
-    userData2-&gt;year = 2017;
+&nbsp;&nbsp; &nbsp;// Create message to send to worker thread 2
+&nbsp;&nbsp; &nbsp;std::shared_ptr&lt;UserData&gt; userData2(new UserData());
+&nbsp;&nbsp; &nbsp;userData2-&gt;msg = &quot;Goodbye world&quot;;
+&nbsp;&nbsp; &nbsp;userData2-&gt;year = 2017;
 
-    // Post the message to worker thread 2
-    workerThread2.PostMsg(userData2);
+&nbsp;&nbsp; &nbsp;// Post the message to worker thread 2
+&nbsp;&nbsp; &nbsp;workerThread2.PostMsg(userData2);
 
-    // Give time for messages processing on worker threads
-    this_thread::sleep_for(1s);
+&nbsp;&nbsp; &nbsp;// Give time for messages processing on worker threads
+&nbsp;&nbsp; &nbsp;this_thread::sleep_for(1s);
 
-    workerThread1.ExitThread();
-    workerThread2.ExitThread();
+&nbsp;&nbsp; &nbsp;workerThread1.ExitThread();
+&nbsp;&nbsp; &nbsp;workerThread2.ExitThread();
 
-    return 0;
+&nbsp;&nbsp; &nbsp;return 0;
 }</pre>
 
 <h2>Conclusion</h2>
 
 <p>The C++ thread support library offers a platform independent way to write multi-threaded application code without reliance upon OS-specific API&rsquo;s. The <code>WorkerThread </code>class presented here is a bare-bones implementation of an event loop, yet all the basics are there ready to be expanded upon.</p>
-
-
 
