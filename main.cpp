@@ -18,7 +18,7 @@ int main(void)
 	workerThread2.CreateThread();
 
 	// Create message to send to worker thread 1
-	UserData* userData1 = new UserData();
+	std::shared_ptr<UserData> userData1(new UserData());
 	userData1->msg = "Hello world";
 	userData1->year = 2017;
 
@@ -26,7 +26,7 @@ int main(void)
 	workerThread1.PostMsg(userData1);
 
 	// Create message to send to worker thread 2
-	UserData* userData2 = new UserData();
+	std::shared_ptr<UserData> userData2(new UserData());
 	userData2->msg = "Goodbye world";
 	userData2->year = 2017;
 
