@@ -2,6 +2,9 @@
 #include "Fault.h"
 #include <iostream>
 
+// @see https://github.com/endurodave/StdWorkerThread
+// David Lafreniere
+
 using namespace std;
 
 // Worker thread instances
