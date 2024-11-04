@@ -1,17 +1,34 @@
 # C++ std::thread Event Loop with Message Queue and Timer
 Create a worker thread with an event loop, message queue and a timer using the C++11 thread support library.
 
+# Table of Contents
+
+- [C++ std::thread Event Loop with Message Queue and Timer](#c-stdthread-event-loop-with-message-queue-and-timer)
+- [Table of Contents](#table-of-contents)
+- [Preface](#preface)
+- [Introduction](#introduction)
+- [Background](#background)
+- [WorkerThread](#workerthread)
+- [Event Loop](#event-loop)
+  - [Event Loop (Win32)](#event-loop-win32)
+- [Timer](#timer)
+- [Usage](#usage)
+- [Conclusion](#conclusion)
+
+
+# Preface
+
 Originally published on CodeProject at: <a href="http://www.codeproject.com/Articles/1169105/Cplusplus-std-thread-Event-Loop-with-Message-Queue"><strong>C++ std::thread Event Loop with Message Queue and Timer</strong></a>
 
 <p><a href="https://www.cmake.org/">CMake</a>&nbsp;is used to create the build files. CMake is free and open-source software. Windows, Linux and other toolchains are supported. See the <strong>CMakeLists.txt </strong>file for more information.</p>
 
-<h2>Introduction</h2>
+# Introduction
 
 <p>An event loop, or sometimes called a message loop, is a thread that waits for and dispatches incoming events. The thread blocks waiting for requests to arrive and then dispatches the event to an event handler function. A message queue is typically used by the loop to hold incoming messages. Each message is sequentially dequeued, decoded, and then an action is performed. Event loops are one way to implement inter-process communication.</p>
 
 <p>All operating systems provide support for multi-threaded applications. Each OS has unique function calls for creating threads, message queues and timers. With the advent of the C++11 thread support library, it&rsquo;s now possible to create portable code and avoid the OS-specific function calls. This article provides a simple example of how to create a thread event loop, message queue and timer services while only relying upon the C++ Standard Library. Any C++11 compiler supporting the thread library should be able to compile the attached source.</p>
 
-<h2>Background</h2>
+# Background
 
 <p>Typically, I need a thread to operate as an event loop. Incoming messages are dequeued by the thread and data is dispatched to an appropriate function handler based on a unique message identifier. Timer support capable of invoking a function is handy for low speed polling or to generate a timeout if something doesn&rsquo;t happen in the expected amount of time. Many times, the worker thread is created at startup and isn&rsquo;t destroyed until the application terminates.</p>
 
@@ -19,7 +36,7 @@ Originally published on CodeProject at: <a href="http://www.codeproject.com/Arti
 
 <p>At first glance, the C++ thread support seems to be missing some key features. Yes, <code>std::thread </code>is available to spin off a thread but there is no thread-safe queue and no timers &ndash; services that most OS&rsquo;s provide. I&rsquo;ll show how to use the C++ Standard Library to create these &ldquo;missing&rdquo; features and provide an event processing loop familiar to many programmers.</p>
 
-<h2>WorkerThread</h2>
+# WorkerThread
 
 <p>The <code>WorkerThread </code>class encapsulates all the necessary event loop mechanisms. A simple class interface allows thread creation, posting messages to the event loop, and eventual thread termination. The interface is shown below:</p>
 
@@ -80,7 +97,7 @@ bool WorkerThread::CreateThread()
     return true;
 }</pre>
 
-<h2>Event Loop</h2>
+# Event Loop
 
 <p>The <code>Process() </code>event loop is shown below. The thread relies upon a <code>std::queue&lt;ThreadMsg*&gt; </code>for the message queue. <code>std::queue </code>is not thread-safe so all access to the queue must be protected by mutex. A <code>std::condition_variable </code>is used to suspend the thread until notified that a new message has been added to the queue.</p>
 
@@ -173,7 +190,7 @@ void WorkerThread::ExitThread()
 &nbsp; &nbsp; m_thread = nullptr;
 }</pre>
 
-<h3>Event Loop (Win32)</h3>
+## Event Loop (Win32)
 
 <p>The code snippet below contrasts the <code>std::thread </code>event loop above with a similar Win32 version using the Windows API. Notice <code>GetMessage() </code>API is used in lieu of the <code>std::queue</code>. Messages are posted to the OS message queue using <code>PostThreadMessage()</code>. And finally, <code>timerSetEvent() </code>is used to place <code>WM_USER_TIMER </code>messages into the queue. All of these services are provided by the OS. The <code>std::thread WorkerThread </code>implementation presented here avoids the raw OS calls yet the implementation functionality is the same as the Win32 version while relying only upon only the C++ Standard Library.</p>
 
@@ -220,7 +237,7 @@ unsigned long WorkerThread::Process(void* parameter)
     return 0;
 }</pre>
 
-<h2>Timer</h2>
+# Timer
 
 <p>A low-resolution periodic timer message is inserted into the queue using a secondary private thread. The timer thread is created inside <code>Process()</code>.</p>
 
@@ -251,7 +268,7 @@ void WorkerThread::TimerThread()
 &nbsp; &nbsp; }
 }</pre>
 
-<h2>Usage</h2>
+# Usage
 
 <p>The <code>main()</code> function below shows how to use the <code>WorkerThread </code>class. Two worker threads are created and a message is posted to each one. After a short delay, both threads exit.</p>
 
@@ -291,7 +308,7 @@ int main(void)
 &nbsp;&nbsp; &nbsp;return 0;
 }</pre>
 
-<h2>Conclusion</h2>
+# Conclusion
 
 <p>The C++ thread support library offers a platform independent way to write multi-threaded application code without reliance upon OS-specific API&rsquo;s. The <code>WorkerThread </code>class presented here is a bare-bones implementation of an event loop, yet all the basics are there ready to be expanded upon.</p>
 
