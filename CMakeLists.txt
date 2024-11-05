@@ -13,7 +13,7 @@ cmake_minimum_required(VERSION 3.10)
 project(StdWorkerThread VERSION 1.0 LANGUAGES CXX)
 
 # Collect all .cpp source files in the current directory
-file(GLOB SOURCES "${CMAKE_SOURCE_DIR}/*.cpp")
+file(GLOB SOURCES "${CMAKE_SOURCE_DIR}/*.cpp" "${CMAKE_SOURCE_DIR}/*.h")
 
 # Add an executable target
 add_executable(StdWorkerThreadApp ${SOURCES})
