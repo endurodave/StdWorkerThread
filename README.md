@@ -13,6 +13,7 @@ Create a worker thread with an event loop, message queue and a timer using the C
   - [Event Loop (Win32)](#event-loop-win32)
 - [Timer](#timer)
 - [Usage](#usage)
+- [Star History](#star-history)
 - [Conclusion](#conclusion)
 
 
@@ -307,6 +308,12 @@ int main(void)
 
 &nbsp;&nbsp; &nbsp;return 0;
 }</pre>
+
+# Star History
+
+Find this repository useful? Consider giving it a star!
+
+[![Star History Chart](https://api.star-history.com/svg?repos=endurodave/StdWorkerThread&type=Date)](https://star-history.com/#endurodave/StdWorkerThread&Date)
 
 # Conclusion
 
