@@ -26,4 +26,4 @@ jobs:
       run: cmake --build build --config Release  # Build the project using CMake with Release configuration
 
     - name: Run StdWorkerThreadApp
-      run: .\build\Release\DeleStdWorkerThreadApp.exe  # Run the built executable (adjust path for MSBuild)
+      run: .\build\Release\StdWorkerThreadApp.exe  # Run the built executable (adjust path for MSBuild)
