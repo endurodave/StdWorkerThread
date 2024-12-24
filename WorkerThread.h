@@ -22,7 +22,7 @@ class WorkerThread
 {
 public:
     /// Constructor
-    WorkerThread(const char* threadName);
+    WorkerThread(const std::string& threadName);
 
     /// Destructor
     ~WorkerThread();
