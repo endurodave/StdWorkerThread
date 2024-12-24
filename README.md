@@ -1,4 +1,10 @@
+![License MIT](https://img.shields.io/github/license/BehaviorTree/BehaviorTree.CPP?color=blue)
+[![conan Ubuntu](https://github.com/endurodave/StdWorkerThread/actions/workflows/cmake_ubuntu.yml/badge.svg)](https://github.com/endurodave/StdWorkerThread/actions/workflows/cmake_ubuntu.yml)
+[![conan Ubuntu](https://github.com/endurodave/StdWorkerThread/actions/workflows/cmake_clang.yml/badge.svg)](https://github.com/endurodave/StdWorkerThread/actions/workflows/cmake_clang.yml)
+[![conan Windows](https://github.com/endurodave/StdWorkerThread/actions/workflows/cmake_windows.yml/badge.svg)](https://github.com/endurodave/StdWorkerThread/actions/workflows/cmake_windows.yml)
+
 # C++ std::thread Event Loop with Message Queue and Timer
+
 Create a worker thread with an event loop, message queue and a timer using the C++11 thread support library.
 
 # Table of Contents
@@ -15,7 +21,6 @@ Create a worker thread with an event loop, message queue and a timer using the C
 - [Usage](#usage)
 - [Star History](#star-history)
 - [Conclusion](#conclusion)
-
 
 # Preface
 

@@ -1,0 +1,26 @@
+name: Clang
+
+on:
+  push:
+    branches:
+      - master  # Trigger on push 
+  pull_request:
+    branches:
+      - master   # Trigger on pull 
+
+jobs:
+  build:
+    runs-on: ubuntu-latest  # Use Ubuntu environment for the build
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2  # Checkout the repository code
+
+    - name: Configure CMake with Clang
+      run: cmake -S . -B build -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++  # Configure CMake with Clang as the compiler
+
+    - name: Build
+      run: cmake --build build  # Build the project using CMake
+
+    - name: Run StdWorkerThreadApp
+      run: ./build/StdWorkerThreadApp  # Run the built executable

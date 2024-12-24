@@ -1,0 +1,26 @@
+name: Ubuntu
+
+on:
+  push:
+    branches:
+      - master  # Trigger on push 
+  pull_request:
+    branches:
+      - master   # Trigger on pull 
+
+jobs:
+  build:
+    runs-on: ubuntu-latest  # Use Ubuntu environment for the build
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2  # Checkout the repository code
+
+    - name: Configure CMake
+      run: cmake -S . -B build # Configure CMake to generate build files in 'build' directory
+
+    - name: Build
+      run: cmake --build build  # Build the project using CMake
+
+    - name: Run StdWorkerThreadApp
+      run: ./build/StdWorkerThreadApp  # Run the built executable
