@@ -19,7 +19,7 @@ Create a worker thread with an event loop, message queue and a timer using the C
   - [Event Loop (Win32)](#event-loop-win32)
 - [Timer](#timer)
 - [Usage](#usage)
-- [Star History](#star-history)
+- [Related Repositories](#related-repositories)
 - [Conclusion](#conclusion)
 
 # Preface
@@ -314,11 +314,16 @@ int main(void)
 &nbsp;&nbsp; &nbsp;return 0;
 }</pre>
 
-# Star History
+# Related Repositories
 
-Find this repository useful? Consider giving it a star!
+Real-world projects using `WorkerThread`.
 
-[![Star History Chart](https://api.star-history.com/svg?repos=endurodave/StdWorkerThread&type=Date)](https://star-history.com/#endurodave/StdWorkerThread&Date)
+* <a href="https://github.com/endurodave/DelegateMQ">Asynchronous Delegates in C++</a> - Invoke any C++ callable function synchronously, asynchronously, or on a remote endpoint.
+* <a href="https://github.com/endurodave/StateMachineWithThreads">C++ State Machine with Threads</a> - A framework combining C++ state machines and multicast asynchronous callbacks.
+* <a href="https://github.com/endurodave/StateMachineWithModernDelegates">C++ State Machine with Asynchronous Delegates</a> - A framework combining C++ state machines and asynchronous delegate callbacks.
+* <a href="https://github.com/endurodave/AsyncStateMachine">Asynchronous State Machine Design in C++</a> - An asynchronous C++ state machine implemented using an asynchronous delegate library.
+* <a href="https://github.com/endurodave/IntegrationTestFramework">Integration Test Framework using Google Test and Delegates</a> - A multi-threaded C++ software integration test framework using Google Test and DelegateMQ libraries.
+* <a href="https://github.com/endurodave/Async-SQLite">Asynchronous SQLite API using C++ Delegates</a> - An asynchronous SQLite wrapper implemented using an asynchronous delegate library.
 
 # Conclusion
 

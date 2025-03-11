@@ -22,7 +22,11 @@ struct ThreadMsg
 //----------------------------------------------------------------------------
 // WorkerThread
 //----------------------------------------------------------------------------
-WorkerThread::WorkerThread(const std::string& threadName) : m_thread(nullptr), m_timerExit(false), THREAD_NAME(threadName)
+WorkerThread::WorkerThread(const std::string& threadName) : 
+	m_thread(nullptr), 
+	m_exit(false), 
+	m_timerExit(false), 
+	THREAD_NAME(threadName)
 {
 }
 
@@ -41,20 +45,15 @@ bool WorkerThread::CreateThread()
 {
 	if (!m_thread)
 	{
+		m_threadStartFuture = m_threadStartPromise.get_future();
+
 		m_thread = std::unique_ptr<std::thread>(new thread(&WorkerThread::Process, this));
 
-#ifdef WIN32
-		// Get the thread's native Windows handle
 		auto handle = m_thread->native_handle();
+		SetThreadName(handle, THREAD_NAME);
 
-		// Set the thread name so it shows in the Visual Studio Debug Location toolbar
-		std::wstring wstr(THREAD_NAME.begin(), THREAD_NAME.end());
-		HRESULT hr = SetThreadDescription(handle, wstr.c_str());
-		if (FAILED(hr))
-		{
-			// Handle error if needed
-		}
-#endif
+		// Wait for the thread to enter the Process method
+		m_threadStartFuture.get();
 	}
 
 	return true;
@@ -78,6 +77,31 @@ std::thread::id WorkerThread::GetCurrentThreadId()
 }
 
 //----------------------------------------------------------------------------
+// GetQueueSize
+//----------------------------------------------------------------------------
+size_t WorkerThread::GetQueueSize()
+{
+	lock_guard<mutex> lock(m_mutex);
+	return m_queue.size();
+}
+
+//----------------------------------------------------------------------------
+// SetThreadName
+//----------------------------------------------------------------------------
+void WorkerThread::SetThreadName(std::thread::native_handle_type handle, const std::string& name)
+{
+#ifdef WIN32
+	// Set the thread name so it shows in the Visual Studio Debug Location toolbar
+	std::wstring wstr(name.begin(), name.end());
+	HRESULT hr = SetThreadDescription(handle, wstr.c_str());
+	if (FAILED(hr))
+	{
+		// Handle error if needed
+	}
+#endif
+}
+
+//----------------------------------------------------------------------------
 // ExitThread
 //----------------------------------------------------------------------------
 void WorkerThread::ExitThread()
@@ -95,8 +119,16 @@ void WorkerThread::ExitThread()
 		m_cv.notify_one();
 	}
 
-    m_thread->join();
-    m_thread = nullptr;
+	m_exit.store(true);
+	m_thread->join();
+
+	// Clear the queue if anything added while waiting for join
+	{
+		lock_guard<mutex> lock(m_mutex);
+		m_thread = nullptr;
+		while (!m_queue.empty())
+			m_queue.pop();
+	}
 }
 
 //----------------------------------------------------------------------------
@@ -104,6 +136,8 @@ void WorkerThread::ExitThread()
 //----------------------------------------------------------------------------
 void WorkerThread::PostMsg(std::shared_ptr<UserData> data)
 {
+	if (m_exit.load())
+		return;
 	ASSERT_TRUE(m_thread);
 
 	// Create a new ThreadMsg
@@ -123,7 +157,7 @@ void WorkerThread::TimerThread()
     while (!m_timerExit)
     {
         // Sleep for 250mS then put a MSG_TIMER into the message queue
-        std::this_thread::sleep_for(250ms);
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
 
         std::shared_ptr<ThreadMsg> threadMsg (new ThreadMsg(MSG_TIMER, 0));
 
@@ -139,6 +173,9 @@ void WorkerThread::TimerThread()
 //----------------------------------------------------------------------------
 void WorkerThread::Process()
 {
+	// Signal that the thread has started processing to notify CreateThread
+	m_threadStartPromise.set_value();
+
     m_timerExit = false;
     std::thread timerThread(&WorkerThread::TimerThread, this);
 

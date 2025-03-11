@@ -36,8 +36,7 @@ int main(void)
 	// Post the message to worker thread 2
 	workerThread2.PostMsg(userData2);
 
-	// Give time for messages processing on worker threads
-	this_thread::sleep_for(1s);
+	std::this_thread::sleep_for(std::chrono::seconds(1));
 
 	workerThread1.ExitThread();
 	workerThread2.ExitThread();
