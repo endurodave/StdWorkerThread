@@ -12,6 +12,7 @@ Create a worker thread with an event loop, message queue and a timer using the C
 - [C++ std::thread Event Loop with Message Queue and Timer](#c-stdthread-event-loop-with-message-queue-and-timer)
 - [Table of Contents](#table-of-contents)
 - [Preface](#preface)
+- [Getting Started](#getting-started)
 - [Introduction](#introduction)
 - [Background](#background)
 - [WorkerThread](#workerthread)
@@ -26,7 +27,14 @@ Create a worker thread with an event loop, message queue and a timer using the C
 
 Originally published on CodeProject at: <a href="http://www.codeproject.com/Articles/1169105/Cplusplus-std-thread-Event-Loop-with-Message-Queue"><strong>C++ std::thread Event Loop with Message Queue and Timer</strong></a>
 
-<p><a href="https://www.cmake.org/">CMake</a>&nbsp;is used to create the build files. CMake is free and open-source software. Windows, Linux and other toolchains are supported. See the <strong>CMakeLists.txt </strong>file for more information.</p>
+# Getting Started
+
+[CMake](https://cmake.org/) is used to create the project build files on any Windows or Linux machine. The source code works on any C++ compiler with `std::thread` support.
+
+1. Clone the repository.
+2. From the repository root, run the following CMake command:   
+   `cmake -B Build .`
+3. Build and run the project within the `Build` directory. 
 
 # Introduction
 
