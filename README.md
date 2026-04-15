@@ -55,7 +55,7 @@ The `Thread` class encapsulates all the necessary event loop mechanisms. A simpl
 class Thread
 {
 public:
-    Thread(const std::string& threadName, size_t maxQueueSize = 0);
+    Thread(const std::string& threadName, size_t maxQueueSize = 0, FullPolicy fullPolicy = FullPolicy::BLOCK);
     ~Thread();
 
     bool CreateThread(std::optional<std::chrono::milliseconds> watchdogTimeout = std::nullopt);
@@ -168,17 +168,25 @@ void Thread::Process()
 ```cpp
 void Thread::PostMsg(std::shared_ptr<UserData> data, Priority priority)
 {
-    auto threadMsg = make_shared<ThreadMsg>(MSG_POST_USER_DATA, data, priority);
+    if (m_exit.load())
+        return;
 
     unique_lock<mutex> lk(m_mutex);
 
-    if (MAX_QUEUE_SIZE > 0)
+    if (MAX_QUEUE_SIZE > 0 && m_queue.size() >= MAX_QUEUE_SIZE)
     {
+        if (FULL_POLICY == FullPolicy::DROP)
+            return;  // silently discard — caller is not stalled
+
         m_cvNotFull.wait(lk, [this]() {
             return m_queue.size() < MAX_QUEUE_SIZE || m_exit.load();
         });
     }
 
+    if (m_exit.load())
+        return;
+
+    auto threadMsg = make_shared<ThreadMsg>(MSG_POST_USER_DATA, data, priority);
     m_queue.push(threadMsg);
     m_cv.notify_one();
 }
@@ -210,13 +218,17 @@ When several messages are in the queue simultaneously, the worker thread always 
 
 # Back Pressure
 
-An optional `maxQueueSize` constructor argument caps how many messages may sit in the queue at once. When the queue is full, `PostMsg()` blocks the calling thread on a second condition variable (`m_cvNotFull`) until the worker drains at least one message and signals that space is available.
+An optional `maxQueueSize` constructor argument caps how many messages may sit in the queue at once. When the queue is full, the `FullPolicy` determines the behavior:
+
+* **BLOCK:** (default) `PostMsg()` blocks the calling thread on a second condition variable (`m_cvNotFull`) until the worker drains at least one message and signals that space is available. This cooperative throttling prevents a fast producer from outrunning a slow consumer and exhausting memory.
+* **DROP:** `PostMsg()` silently discards the message and returns immediately. This is useful for high-rate, best-effort data like sensor telemetry or UI updates where a stale sample is preferable to stalling the producer.
 
 ```cpp
-Thread workerThread("MyThread", 5); // back pressure kicks in at 5 queued messages
+Thread workerThread1("MyThread", 5); // BLOCK policy by default
+Thread workerThread2("MyThread", 5, FullPolicy::DROP); // DROP policy enabled
 ```
 
-This cooperative throttling prevents a fast producer from outrunning a slow consumer and exhausting memory. When no limit is needed, pass `0` (the default) and `PostMsg()` never blocks.
+When no limit is needed, pass `0` (the default) for `maxQueueSize` and `PostMsg()` never blocks or drops.
 
 During shutdown `ExitThread()` sets the exit flag inside the lock and calls `m_cvNotFull.notify_all()`, ensuring any thread blocked in `PostMsg()` unblocks immediately rather than waiting for queue space that will never arrive.
 

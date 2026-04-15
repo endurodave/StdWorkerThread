@@ -45,6 +45,16 @@ struct ThreadMsgComparator {
     }
 };
 
+/// @brief Policy applied when the thread message queue is full.
+/// @details Only meaningful when maxQueueSize > 0.
+///   - BLOCK: PostMsg() blocks the caller until space is available (back pressure).
+///   - DROP:  PostMsg() silently discards the message and returns immediately.
+///
+/// Use DROP for high-rate best-effort topics where a stale sample is preferable 
+/// to stalling the publisher. Use BLOCK for critical topics where no message 
+/// may be lost.
+enum class FullPolicy { BLOCK, DROP };
+
 /// @brief Cross-platform worker thread for any system supporting C++17 std::thread.
 class Thread
 {
@@ -53,7 +63,8 @@ public:
     /// @param threadName  Thread name shown in debugger.
     /// @param maxQueueSize  Max queued messages before back pressure kicks in
     ///                      (0 = unlimited).
-    Thread(const std::string& threadName, size_t maxQueueSize = 0);
+    /// @param fullPolicy  When the queue is full: BLOCK the caller or DROP the message.
+    Thread(const std::string& threadName, size_t maxQueueSize = 0, FullPolicy fullPolicy = FullPolicy::BLOCK);
 
     /// Destructor — calls ExitThread() if not already stopped.
     ~Thread();
@@ -115,6 +126,7 @@ private:
 
     const std::string THREAD_NAME;
     const size_t MAX_QUEUE_SIZE;
+    const FullPolicy FULL_POLICY;
 
     std::optional<std::promise<void>> m_threadStartPromise;
     std::optional<std::future<void>>  m_threadStartFuture;

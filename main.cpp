@@ -38,10 +38,12 @@ using namespace std;
 //   workerThread2 — max 5 queued messages, used for the back pressure demo.
 //   workerThread3 — watchdog enabled, used for the watchdog demo.
 //   workerThread4 — unlimited queue, used for the timer demo.
+//   workerThread5 — max 5 queued messages, FullPolicy::DROP used for drop demo.
 Thread workerThread1("WorkerThread1");
 Thread workerThread2("WorkerThread2", 5);
 Thread workerThread3("WorkerThread3");
 Thread workerThread4("WorkerThread4");
+Thread workerThread5("WorkerThread5", 5, FullPolicy::DROP);
 
 //------------------------------------------------------------------------------
 // main
@@ -55,10 +57,26 @@ int main(void)
     workerThread2.CreateThread();
     workerThread3.CreateThread(std::chrono::milliseconds(2000)); // 2 s watchdog
     workerThread4.CreateThread();
+    workerThread5.CreateThread();
 
     // -------------------------------------------------------------------------
-    // Priority queue demo (WorkerThread1)
+    // DROP demo (WorkerThread5, maxQueueSize = 5, FullPolicy = DROP)
     //
+    // Ten messages are posted to a thread whose queue holds at most 5. Once
+    // the queue is full, subsequent PostMsg() calls silently discard the
+    // message and return immediately without blocking. This is useful for
+    // best-effort telemetry or display updates.
+    // -------------------------------------------------------------------------
+    cout << "\n-- DROP demo (WorkerThread5, maxQueueSize=5, policy=DROP) --" << endl;
+
+    for (int i = 1; i <= 10; i++)
+    {
+        auto data  = make_shared<UserData>();
+        data->msg  = "Drop message #" + to_string(i);
+        data->year = 2026;
+        workerThread5.PostMsg(data); // returns immediately even if queue is full
+    }
+
     // Three messages are posted in LOW -> NORMAL -> HIGH order. Because all
     // three are enqueued before the worker has a chance to drain them, the
     // priority queue reorders them so HIGH is processed first, then NORMAL,
@@ -152,6 +170,7 @@ int main(void)
     workerThread2.ExitThread();
     workerThread3.ExitThread();
     workerThread4.ExitThread();
+    workerThread5.ExitThread();
 
     return 0;
 }

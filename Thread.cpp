@@ -23,11 +23,12 @@ static steady_clock::time_point GetNow()
 //----------------------------------------------------------------------------
 // Thread
 //----------------------------------------------------------------------------
-Thread::Thread(const std::string& threadName, size_t maxQueueSize)
+Thread::Thread(const std::string& threadName, size_t maxQueueSize, FullPolicy fullPolicy)
     : m_thread(std::nullopt)
     , m_exit(false)
     , THREAD_NAME(threadName)
     , MAX_QUEUE_SIZE(maxQueueSize)
+    , FULL_POLICY(fullPolicy)
     , m_watchdogExit(false)
     , m_lastAliveTime(steady_clock::time_point{})
     , m_watchdogTimeout(steady_clock::duration::zero())
@@ -177,13 +178,15 @@ void Thread::PostMsg(std::shared_ptr<UserData> data, Priority priority)
         return;
     ASSERT_TRUE(m_thread.has_value());
 
-    auto threadMsg = make_shared<ThreadMsg>(MSG_POST_USER_DATA, data, priority);
-
     unique_lock<mutex> lk(m_mutex);
 
-    // [BACK PRESSURE] Block the caller until space is available
-    if (MAX_QUEUE_SIZE > 0)
+    // [BACK PRESSURE / DROP LOGIC]
+    if (MAX_QUEUE_SIZE > 0 && m_queue.size() >= MAX_QUEUE_SIZE)
     {
+        if (FULL_POLICY == FullPolicy::DROP)
+            return;  // silently discard — caller is not stalled
+
+        // BLOCK: wait until the consumer drains a slot or the thread exits
         m_cvNotFull.wait(lk, [this]() {
             return m_queue.size() < MAX_QUEUE_SIZE || m_exit.load();
         });
@@ -192,6 +195,7 @@ void Thread::PostMsg(std::shared_ptr<UserData> data, Priority priority)
     if (m_exit.load())
         return;
 
+    auto threadMsg = make_shared<ThreadMsg>(MSG_POST_USER_DATA, data, priority);
     m_queue.push(threadMsg);
     m_cv.notify_one();
 }
