@@ -3,10 +3,10 @@ name: Windows
 on:
   push:
     branches:
-      - master  # Trigger on push 
+      - master  # Trigger on push
   pull_request:
     branches:
-      - master  # Trigger on pull 
+      - master  # Trigger on pull
 
 jobs:
   build:
@@ -14,13 +14,13 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v2  # Checkout the repository code
+      uses: actions/checkout@v4  # Checkout the repository code
 
     - name: Set up Visual Studio
-      uses: microsoft/setup-msbuild@v1.1  # Set up Visual Studio environment (MSBuild)
+      uses: microsoft/setup-msbuild@v2  # Set up Visual Studio environment (MSBuild)
 
     - name: Configure CMake
-      run: cmake -S . -B build -G "Visual Studio 17 2022" # Configure CMake for Visual Studio
+      run: cmake -S . -B build -G "Visual Studio 17 2022"  # Configure CMake for Visual Studio
 
     - name: Build
       run: cmake --build build --config Release  # Build the project using CMake with Release configuration
