@@ -37,21 +37,24 @@ using namespace std;
 //   workerThread1 — unlimited queue, used for the priority demo.
 //   workerThread2 — max 5 queued messages, used for the back pressure demo.
 //   workerThread3 — watchdog enabled, used for the watchdog demo.
+//   workerThread4 — unlimited queue, used for the timer demo.
 Thread workerThread1("WorkerThread1");
 Thread workerThread2("WorkerThread2", 5);
 Thread workerThread3("WorkerThread3");
+Thread workerThread4("WorkerThread4");
 
 //------------------------------------------------------------------------------
 // main
 //------------------------------------------------------------------------------
 int main(void)
 {
-    // Start all three worker threads. Each thread signals via std::promise that
+    // Start all worker threads. Each thread signals via std::promise that
     // it is fully running before CreateThread() returns, so it is safe to post
     // messages immediately after this block.
     workerThread1.CreateThread();
     workerThread2.CreateThread();
     workerThread3.CreateThread(std::chrono::milliseconds(2000)); // 2 s watchdog
+    workerThread4.CreateThread();
 
     // -------------------------------------------------------------------------
     // Priority queue demo (WorkerThread1)
@@ -110,12 +113,45 @@ int main(void)
     wdData->year = 2026;
     workerThread3.PostMsg(wdData);
 
-    // Give worker threads time to finish processing before shutting down.
-    this_thread::sleep_for(chrono::milliseconds(500));
+    // -------------------------------------------------------------------------
+    // Timer demo (WorkerThread4)
+    //
+    // A plain std::thread fires every 250ms and posts a LOW priority message
+    // to workerThread4. Back pressure works naturally here: if workerThread4
+    // fell behind,
+    // PostMsg() would block the timer thread rather than flooding the queue.
+    // The timer thread checks timerExit before each sleep so it exits cleanly
+    // without waiting for one last 250ms interval to expire.
+    // -------------------------------------------------------------------------
+    cout << "\n-- Timer demo (WorkerThread4, 250ms interval) --" << endl;
+
+    atomic<bool> timerExit(false);
+    thread timerThread([&]() {
+        while (!timerExit.load())
+        {
+            this_thread::sleep_for(chrono::milliseconds(250));
+            if (timerExit.load())
+                break;
+
+            auto data  = make_shared<UserData>();
+            data->msg  = "Timer expired";
+            data->year = 2026;
+            workerThread4.PostMsg(data, Priority::LOW);
+        }
+    });
+
+    // Let the timer fire a few times.
+    this_thread::sleep_for(chrono::milliseconds(1000));
+
+    // Stop the timer thread before exiting the worker thread so PostMsg()
+    // is never called after ExitThread().
+    timerExit.store(true);
+    timerThread.join();
 
     workerThread1.ExitThread();
     workerThread2.ExitThread();
     workerThread3.ExitThread();
+    workerThread4.ExitThread();
 
     return 0;
 }
