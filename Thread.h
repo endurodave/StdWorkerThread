@@ -10,8 +10,12 @@
 ///
 /// @details
 /// Key features:
-/// * **Priority Queue:** Uses std::priority_queue so high-priority messages
-///   are processed before lower-priority ones.
+/// * **Priority Queue:** Uses one FIFO deque per priority level (HIGH,
+///   NORMAL, LOW) so higher-priority messages are always processed before
+///   lower-priority ones, while messages posted at the same priority are
+///   processed in the order they were posted. (An earlier implementation
+///   used a single std::priority_queue, whose underlying binary heap does
+///   not preserve insertion order among equal-priority elements.)
 /// * **Back Pressure:** Configurable maxQueueSize. When the queue is full,
 ///   PostMsg() blocks the caller until space is available.
 /// * **Watchdog:** Optional timeout detects a stalled thread (deadlock or
@@ -22,7 +26,7 @@
 
 #include "ThreadMsg.h"
 #include <thread>
-#include <queue>
+#include <deque>
 #include <mutex>
 #include <atomic>
 #include <condition_variable>
@@ -35,14 +39,6 @@ struct UserData
 {
     std::string msg;
     int year;
-};
-
-// Comparator: highest Priority value is processed first
-struct ThreadMsgComparator {
-    bool operator()(const std::shared_ptr<ThreadMsg>& a,
-                    const std::shared_ptr<ThreadMsg>& b) const {
-        return static_cast<int>(a->GetPriority()) < static_cast<int>(b->GetPriority());
-    }
 };
 
 /// @brief Policy applied when the thread message queue is full.
@@ -115,10 +111,11 @@ private:
     std::optional<std::thread> m_thread;
     std::atomic<bool> m_exit;
 
-    std::priority_queue<
-        std::shared_ptr<ThreadMsg>,
-        std::vector<std::shared_ptr<ThreadMsg>>,
-        ThreadMsgComparator> m_queue;
+    // One FIFO queue per priority level. Draining checks HIGH, then NORMAL,
+    // then LOW, so within a level messages are processed in post order.
+    std::deque<std::shared_ptr<ThreadMsg>> m_highQueue;
+    std::deque<std::shared_ptr<ThreadMsg>> m_normalQueue;
+    std::deque<std::shared_ptr<ThreadMsg>> m_lowQueue;
 
     std::mutex m_mutex;
     std::condition_variable m_cv;       // notifies consumer of new messages

@@ -98,7 +98,7 @@ void Thread::ExitThread()
     {
         lock_guard<mutex> lock(m_mutex);
         m_exit.store(true);
-        m_queue.push(exitMsg);
+        m_highQueue.push_back(exitMsg);
         m_cv.notify_one();
         m_cvNotFull.notify_all(); // unblock any blocked producers
     }
@@ -114,8 +114,9 @@ void Thread::ExitThread()
     {
         lock_guard<mutex> lock(m_mutex);
         m_thread.reset();
-        while (!m_queue.empty())
-            m_queue.pop();
+        m_highQueue.clear();
+        m_normalQueue.clear();
+        m_lowQueue.clear();
         m_cvNotFull.notify_all();
     }
 }
@@ -153,7 +154,7 @@ bool Thread::IsCurrentThread()
 size_t Thread::GetQueueSize()
 {
     lock_guard<mutex> lock(m_mutex);
-    return m_queue.size();
+    return m_highQueue.size() + m_normalQueue.size() + m_lowQueue.size();
 }
 
 //----------------------------------------------------------------------------
@@ -180,15 +181,19 @@ void Thread::PostMsg(std::shared_ptr<UserData> data, Priority priority)
 
     unique_lock<mutex> lk(m_mutex);
 
+    auto totalSize = [this]() {
+        return m_highQueue.size() + m_normalQueue.size() + m_lowQueue.size();
+    };
+
     // [BACK PRESSURE / DROP LOGIC]
-    if (MAX_QUEUE_SIZE > 0 && m_queue.size() >= MAX_QUEUE_SIZE)
+    if (MAX_QUEUE_SIZE > 0 && totalSize() >= MAX_QUEUE_SIZE)
     {
         if (FULL_POLICY == FullPolicy::DROP)
             return;  // silently discard — caller is not stalled
 
         // BLOCK: wait until the consumer drains a slot or the thread exits
-        m_cvNotFull.wait(lk, [this]() {
-            return m_queue.size() < MAX_QUEUE_SIZE || m_exit.load();
+        m_cvNotFull.wait(lk, [this, &totalSize]() {
+            return totalSize() < MAX_QUEUE_SIZE || m_exit.load();
         });
     }
 
@@ -196,7 +201,12 @@ void Thread::PostMsg(std::shared_ptr<UserData> data, Priority priority)
         return;
 
     auto threadMsg = make_shared<ThreadMsg>(MSG_POST_USER_DATA, data, priority);
-    m_queue.push(threadMsg);
+    switch (priority)
+    {
+        case Priority::HIGH:   m_highQueue.push_back(threadMsg);   break;
+        case Priority::NORMAL: m_normalQueue.push_back(threadMsg); break;
+        case Priority::LOW:    m_lowQueue.push_back(threadMsg);    break;
+    }
     m_cv.notify_one();
 }
 
@@ -281,7 +291,7 @@ void Thread::Process()
                 // watchdog would incorrectly report the thread as unresponsive.
                 auto heartbeat = m_watchdogTimeout.load() / 4;
                 m_cv.wait_for(lk, heartbeat, [this]() {
-                    return !m_queue.empty() || m_exit.load();
+                    return !(m_highQueue.empty() && m_normalQueue.empty() && m_lowQueue.empty()) || m_exit.load();
                 });
             }
             else
@@ -289,11 +299,11 @@ void Thread::Process()
                 // No watchdog: block indefinitely until a message arrives or
                 // ExitThread() sets m_exit and notifies.
                 m_cv.wait(lk, [this]() {
-                    return !m_queue.empty() || m_exit.load();
+                    return !(m_highQueue.empty() && m_normalQueue.empty() && m_lowQueue.empty()) || m_exit.load();
                 });
             }
 
-            if (m_queue.empty())
+            if (m_highQueue.empty() && m_normalQueue.empty() && m_lowQueue.empty())
             {
                 // Woken with no message — either the watchdog heartbeat fired
                 // (loop back to refresh m_lastAliveTime) or ExitThread() was
@@ -302,11 +312,24 @@ void Thread::Process()
                 continue;
             }
 
-            // Dequeue the highest-priority waiting message.
-            // std::priority_queue::top() returns the greatest element per the
-            // ThreadMsgComparator, i.e. HIGH > NORMAL > LOW.
-            msg = m_queue.top();
-            m_queue.pop();
+            // Dequeue the oldest waiting message from the highest-priority
+            // non-empty queue: HIGH before NORMAL before LOW. Each queue is
+            // FIFO, so same-priority messages are processed in post order.
+            if (!m_highQueue.empty())
+            {
+                msg = m_highQueue.front();
+                m_highQueue.pop_front();
+            }
+            else if (!m_normalQueue.empty())
+            {
+                msg = m_normalQueue.front();
+                m_normalQueue.pop_front();
+            }
+            else
+            {
+                msg = m_lowQueue.front();
+                m_lowQueue.pop_front();
+            }
 
             // --- Back pressure: notify a blocked producer -----------------
             // A producer in PostMsg() may be sleeping on m_cvNotFull because

@@ -94,7 +94,7 @@ When the timed wait expires with an empty queue, the loop simply continues back 
 
 **3. Dequeue and back pressure release**
 
-Messages are dequeued with `m_queue.top()` / `m_queue.pop()`, which returns the highest-priority waiting message (`HIGH` before `NORMAL` before `LOW`). After removing a message, `m_cvNotFull` is signalled to wake any producer that blocked in `PostMsg()` because the queue was at its `MAX_QUEUE_SIZE` limit.
+Messages are dequeued from the first non-empty priority queue, checked in order `HIGH`, `NORMAL`, `LOW`. Each queue is a `std::deque` drained front-to-back, so messages posted at the same priority are always processed in the order they were posted. After removing a message, `m_cvNotFull` is signalled to wake any producer that blocked in `PostMsg()` because the queue was at its `MAX_QUEUE_SIZE` limit.
 
 ```cpp
 void Thread::Process()
@@ -111,24 +111,28 @@ void Thread::Process()
         {
             unique_lock<mutex> lk(m_mutex);
 
+            auto empty = [this]() {
+                return m_highQueue.empty() && m_normalQueue.empty() && m_lowQueue.empty();
+            };
+
             if (m_watchdogTimeout.load() > steady_clock::duration::zero())
             {
                 // Timed wait: wake periodically to keep m_lastAliveTime
                 // current even when the queue is empty.
                 auto heartbeat = m_watchdogTimeout.load() / 4;
-                m_cv.wait_for(lk, heartbeat, [this]() {
-                    return !m_queue.empty() || m_exit.load();
+                m_cv.wait_for(lk, heartbeat, [this, &empty]() {
+                    return !empty() || m_exit.load();
                 });
             }
             else
             {
                 // No watchdog: block until a message arrives or exit is set.
-                m_cv.wait(lk, [this]() {
-                    return !m_queue.empty() || m_exit.load();
+                m_cv.wait(lk, [this, &empty]() {
+                    return !empty() || m_exit.load();
                 });
             }
 
-            if (m_queue.empty())
+            if (empty())
             {
                 // Either the heartbeat fired (loop back, refresh timestamp)
                 // or ExitThread() was called with nothing left (exit).
@@ -136,9 +140,23 @@ void Thread::Process()
                 continue;
             }
 
-            // Dequeue highest-priority message (HIGH > NORMAL > LOW).
-            msg = m_queue.top();
-            m_queue.pop();
+            // Dequeue from the highest-priority non-empty queue
+            // (HIGH > NORMAL > LOW). Each queue is FIFO.
+            if (!m_highQueue.empty())
+            {
+                msg = m_highQueue.front();
+                m_highQueue.pop_front();
+            }
+            else if (!m_normalQueue.empty())
+            {
+                msg = m_normalQueue.front();
+                m_normalQueue.pop_front();
+            }
+            else
+            {
+                msg = m_lowQueue.front();
+                m_lowQueue.pop_front();
+            }
 
             // Wake a producer blocked on a full queue.
             if (MAX_QUEUE_SIZE > 0)
@@ -173,13 +191,17 @@ void Thread::PostMsg(std::shared_ptr<UserData> data, Priority priority)
 
     unique_lock<mutex> lk(m_mutex);
 
-    if (MAX_QUEUE_SIZE > 0 && m_queue.size() >= MAX_QUEUE_SIZE)
+    auto totalSize = [this]() {
+        return m_highQueue.size() + m_normalQueue.size() + m_lowQueue.size();
+    };
+
+    if (MAX_QUEUE_SIZE > 0 && totalSize() >= MAX_QUEUE_SIZE)
     {
         if (FULL_POLICY == FullPolicy::DROP)
             return;  // silently discard — caller is not stalled
 
-        m_cvNotFull.wait(lk, [this]() {
-            return m_queue.size() < MAX_QUEUE_SIZE || m_exit.load();
+        m_cvNotFull.wait(lk, [this, &totalSize]() {
+            return totalSize() < MAX_QUEUE_SIZE || m_exit.load();
         });
     }
 
@@ -187,7 +209,12 @@ void Thread::PostMsg(std::shared_ptr<UserData> data, Priority priority)
         return;
 
     auto threadMsg = make_shared<ThreadMsg>(MSG_POST_USER_DATA, data, priority);
-    m_queue.push(threadMsg);
+    switch (priority)
+    {
+        case Priority::HIGH:   m_highQueue.push_back(threadMsg);   break;
+        case Priority::NORMAL: m_normalQueue.push_back(threadMsg); break;
+        case Priority::LOW:    m_lowQueue.push_back(threadMsg);    break;
+    }
     m_cv.notify_one();
 }
 ```
@@ -196,25 +223,19 @@ void Thread::PostMsg(std::shared_ptr<UserData> data, Priority priority)
 
 # Priority Queue
 
-Messages are stored in a `std::priority_queue` rather than a plain `std::queue`. A custom comparator ensures messages with a higher `Priority` value are dequeued first.
+Messages are stored in one `std::deque` per priority level rather than a single combined queue:
 
 ```cpp
 enum class Priority { LOW = 0, NORMAL = 1, HIGH = 2 };
 
-struct ThreadMsgComparator {
-    bool operator()(const std::shared_ptr<ThreadMsg>& a,
-                    const std::shared_ptr<ThreadMsg>& b) const {
-        return static_cast<int>(a->GetPriority()) < static_cast<int>(b->GetPriority());
-    }
-};
-
-std::priority_queue<
-    std::shared_ptr<ThreadMsg>,
-    std::vector<std::shared_ptr<ThreadMsg>>,
-    ThreadMsgComparator> m_queue;
+std::deque<std::shared_ptr<ThreadMsg>> m_highQueue;
+std::deque<std::shared_ptr<ThreadMsg>> m_normalQueue;
+std::deque<std::shared_ptr<ThreadMsg>> m_lowQueue;
 ```
 
-When several messages are in the queue simultaneously, the worker thread always processes the `HIGH` priority message first, then `NORMAL`, then `LOW`, regardless of the order they were posted. This is useful for giving urgent work — such as a shutdown or error signal — preferential access to the thread without a separate fast-path queue.
+`PostMsg()` appends to the deque matching the message's priority; `Process()` dequeues from the first non-empty deque, checked in order `HIGH`, `NORMAL`, `LOW`. When several messages are queued simultaneously, the worker thread always processes `HIGH` priority messages first, then `NORMAL`, then `LOW`, regardless of post order across levels — useful for giving urgent work, such as a shutdown or error signal, preferential access to the thread without a separate fast-path queue. Because each level is its own FIFO deque, messages posted at the *same* priority are always processed in the order they were posted.
+
+> An earlier version of this class used a single `std::priority_queue` with a comparator over `Priority`. That correctly ordered different priorities, but `std::priority_queue`'s underlying binary heap does not preserve insertion order among equal elements — messages posted at the same priority could be dequeued out of order. The per-priority deque design fixes this while keeping the same `HIGH` > `NORMAL` > `LOW` ordering guarantee across levels.
 
 # Back Pressure
 
