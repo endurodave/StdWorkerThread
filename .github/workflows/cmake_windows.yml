@@ -16,9 +16,6 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v5  # Checkout the repository code
 
-    - name: Set up Visual Studio
-      uses: microsoft/setup-msbuild@v3  # Set up Visual Studio environment (MSBuild)
-
     - name: Configure CMake
       run: cmake -S . -B build  # Let CMake auto-detect the installed Visual Studio generator
 
