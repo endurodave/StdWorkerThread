@@ -4,173 +4,84 @@
 
 // @see https://github.com/endurodave/StdWorkerThread
 // David Lafreniere
-
-// -----------------------------------------------------------------------------
-// This example demonstrates a C++17 worker thread implementation built on
-// std::thread with three key features over a basic event loop:
 //
-//   1. Priority Queue
-//      Messages are held in a std::priority_queue rather than a plain
-//      std::queue. When multiple messages are queued simultaneously the worker
-//      thread always dequeues the highest-priority one first (HIGH > NORMAL >
-//      LOW), making it straightforward to give urgent work preferential access
-//      to the thread without a separate fast-path queue.
-//
-//   2. Back Pressure
-//      An optional maxQueueSize cap limits how many messages may sit in the
-//      queue at once. When the queue is full, PostMsg() blocks the calling
-//      thread until the worker drains at least one message. This prevents a
-//      fast producer from outrunning a slow consumer and exhausting memory.
-//
-//   3. Watchdog
-//      An optional timeout launches a lightweight watchdog thread alongside
-//      the worker. The worker updates a "last alive" timestamp on every loop
-//      iteration. If the timestamp goes stale — because the thread is stuck
-//      inside a handler (deadlock, infinite loop, etc.) — the watchdog logs
-//      an error. In a production system the watchdog callback can trigger a
-//      controlled shutdown or system reset instead.
-// -----------------------------------------------------------------------------
+// Demonstrates a C++17 worker thread built on std::thread:
+//   1. Priority queue: HIGH > NORMAL > LOW, posting order within a level.
+//   2. Back pressure:  a full queue blocks (BLOCK) or discards (DROP) PostMsg().
+//   3. Watchdog:       reports a thread stuck inside a message handler.
+// Then runs the unit tests (UnitTests.cpp) and returns non-zero on failure.
 
 using namespace std;
+using namespace std::chrono;
 
-// Worker thread instances:
-//   workerThread1 — unlimited queue, used for the priority demo.
-//   workerThread2 — max 5 queued messages, used for the back pressure demo.
-//   workerThread3 — watchdog enabled, used for the watchdog demo.
-//   workerThread4 — unlimited queue, used for the timer demo.
-//   workerThread5 — max 5 queued messages, FullPolicy::DROP used for drop demo.
-Thread workerThread1("WorkerThread1");
-Thread workerThread2("WorkerThread2", 5);
-Thread workerThread3("WorkerThread3");
-Thread workerThread4("WorkerThread4");
-Thread workerThread5("WorkerThread5", 5, FullPolicy::DROP);
+int RunUnitTests();
 
-//------------------------------------------------------------------------------
-// main
-//------------------------------------------------------------------------------
+static shared_ptr<UserData> Msg(const string& text)
+{
+    auto data = make_shared<UserData>();
+    data->msg = text;
+    data->year = 2026;
+    return data;
+}
+
 int main(void)
 {
-    // Start all worker threads. Each thread signals via std::promise that
-    // it is fully running before CreateThread() returns, so it is safe to post
-    // messages immediately after this block.
-    workerThread1.CreateThread();
-    workerThread2.CreateThread();
-    workerThread3.CreateThread(std::chrono::milliseconds(2000)); // 2 s watchdog
-    workerThread4.CreateThread();
-    workerThread5.CreateThread();
+    Thread priorityThread("PriorityThread");                    // unlimited queue
+    Thread blockThread("BlockThread", 5);                       // max 5 queued, BLOCK
+    Thread dropThread("DropThread", 5, FullPolicy::DROP);       // max 5 queued, DROP
+    Thread watchdogThread("WatchdogThread");                    // watchdog enabled
+    Thread timerThread("TimerThread");                          // fed by a timer
 
-    // -------------------------------------------------------------------------
-    // DROP demo (WorkerThread5, maxQueueSize = 5, FullPolicy = DROP)
-    //
-    // Ten messages are posted to a thread whose queue holds at most 5. Once
-    // the queue is full, subsequent PostMsg() calls silently discard the
-    // message and return immediately without blocking. This is useful for
-    // best-effort telemetry or display updates.
-    // -------------------------------------------------------------------------
-    cout << "\n-- DROP demo (WorkerThread5, maxQueueSize=5, policy=DROP) --" << endl;
+    // CreateThread() returns once the thread is running, so posting right away is safe
+    priorityThread.CreateThread();
+    blockThread.CreateThread();
+    dropThread.CreateThread();
+    watchdogThread.CreateThread(milliseconds(2000));
+    timerThread.CreateThread();
 
+    // Posted LOW, NORMAL, HIGH; usually processed HIGH, NORMAL, LOW (the worker
+    // may take the first message before the others are queued)
+    cout << "\n-- Priority --" << endl;
+    priorityThread.PostMsg(Msg("Low priority msg"), Priority::LOW);
+    priorityThread.PostMsg(Msg("Normal priority msg"), Priority::NORMAL);
+    priorityThread.PostMsg(Msg("High priority msg"), Priority::HIGH);
+
+    // 10 messages into a queue of 5: PostMsg() blocks until a slot frees up
+    cout << "\n-- Back pressure (BLOCK, max 5) --" << endl;
     for (int i = 1; i <= 10; i++)
-    {
-        auto data  = make_shared<UserData>();
-        data->msg  = "Drop message #" + to_string(i);
-        data->year = 2026;
-        workerThread5.PostMsg(data); // returns immediately even if queue is full
-    }
+        blockThread.PostMsg(Msg("Back pressure message #" + to_string(i)));
 
-    // Three messages are posted in LOW -> NORMAL -> HIGH order. Because all
-    // three are enqueued before the worker has a chance to drain them, the
-    // priority queue reorders them so HIGH is processed first, then NORMAL,
-    // then LOW — regardless of the order they were posted.
-    // -------------------------------------------------------------------------
-    cout << "\n-- Priority queue demo (WorkerThread1) --" << endl;
-
-    auto lowData = make_shared<UserData>();
-    lowData->msg  = "Low priority msg";
-    lowData->year = 2026;
-    workerThread1.PostMsg(lowData, Priority::LOW);
-
-    auto normalData = make_shared<UserData>();
-    normalData->msg  = "Normal priority msg";
-    normalData->year = 2026;
-    workerThread1.PostMsg(normalData, Priority::NORMAL);
-
-    auto highData = make_shared<UserData>();
-    highData->msg  = "High priority msg";
-    highData->year = 2026;
-    workerThread1.PostMsg(highData, Priority::HIGH);
-
-    // -------------------------------------------------------------------------
-    // Back pressure demo (WorkerThread2, maxQueueSize = 5)
-    //
-    // Ten messages are posted to a thread whose queue holds at most 5. Once
-    // the queue is full PostMsg() blocks the main thread until the worker
-    // processes a message and frees a slot. This cooperative throttling keeps
-    // memory use bounded without dropping any messages.
-    // -------------------------------------------------------------------------
-    cout << "\n-- Back pressure demo (WorkerThread2, maxQueueSize=5) --" << endl;
-
+    // 10 messages into a queue of 5: once full, PostMsg() discards and returns
+    cout << "\n-- Back pressure (DROP, max 5) --" << endl;
     for (int i = 1; i <= 10; i++)
-    {
-        auto data  = make_shared<UserData>();
-        data->msg  = "Back pressure message #" + to_string(i);
-        data->year = 2026;
-        workerThread2.PostMsg(data); // blocks the caller when the queue is full
-    }
+        dropThread.PostMsg(Msg("Drop message #" + to_string(i)));
 
-    // -------------------------------------------------------------------------
-    // Watchdog demo (WorkerThread3, timeout = 2 000 ms)
-    //
-    // The thread is healthy here so the watchdog never fires. To observe a
-    // watchdog alert, add a long sleep or spin loop inside the MSG_POST_USER_DATA
-    // case in Thread.cpp — the watchdog will print an error after 2 seconds.
-    // -------------------------------------------------------------------------
-    cout << "\n-- Watchdog demo (WorkerThread3, watchdog=2000ms) --" << endl;
+    // A healthy thread: the 2s watchdog stays silent. A handler that runs past
+    // the timeout is reported (see Watchdog_StalledThreadReported in UnitTests.cpp).
+    cout << "\n-- Watchdog (2000ms) --" << endl;
+    watchdogThread.PostMsg(Msg("Watchdog-monitored message"));
 
-    auto wdData = make_shared<UserData>();
-    wdData->msg  = "Watchdog-monitored message";
-    wdData->year = 2026;
-    workerThread3.PostMsg(wdData);
-
-    // -------------------------------------------------------------------------
-    // Timer demo (WorkerThread4)
-    //
-    // A plain std::thread fires every 250ms and posts a LOW priority message
-    // to workerThread4. Back pressure works naturally here: if workerThread4
-    // fell behind,
-    // PostMsg() would block the timer thread rather than flooding the queue.
-    // The timer thread checks timerExit before each sleep so it exits cleanly
-    // without waiting for one last 250ms interval to expire.
-    // -------------------------------------------------------------------------
-    cout << "\n-- Timer demo (WorkerThread4, 250ms interval) --" << endl;
-
+    // A std::thread "timer" posts a LOW priority message every 250ms
+    cout << "\n-- Timer (250ms) --" << endl;
     atomic<bool> timerExit(false);
-    thread timerThread([&]() {
-        while (!timerExit.load())
+    thread timer([&]() {
+        while (!timerExit)
         {
-            this_thread::sleep_for(chrono::milliseconds(250));
-            if (timerExit.load())
-                break;
-
-            auto data  = make_shared<UserData>();
-            data->msg  = "Timer expired";
-            data->year = 2026;
-            workerThread4.PostMsg(data, Priority::LOW);
+            this_thread::sleep_for(milliseconds(250));
+            if (!timerExit)
+                timerThread.PostMsg(Msg("Timer expired"), Priority::LOW);
         }
     });
+    this_thread::sleep_for(milliseconds(1000));
+    timerExit = true;
+    timer.join();   // stop posting before ExitThread()
 
-    // Let the timer fire a few times.
-    this_thread::sleep_for(chrono::milliseconds(1000));
+    // ExitThread() processes everything still queued, then joins
+    priorityThread.ExitThread();
+    blockThread.ExitThread();
+    dropThread.ExitThread();
+    watchdogThread.ExitThread();
+    timerThread.ExitThread();
 
-    // Stop the timer thread before exiting the worker thread so PostMsg()
-    // is never called after ExitThread().
-    timerExit.store(true);
-    timerThread.join();
-
-    workerThread1.ExitThread();
-    workerThread2.ExitThread();
-    workerThread3.ExitThread();
-    workerThread4.ExitThread();
-    workerThread5.ExitThread();
-
-    return 0;
+    return RunUnitTests() == 0 ? 0 : 1;
 }

@@ -30,6 +30,8 @@ Thread::Thread(const std::string& threadName, size_t maxQueueSize, FullPolicy fu
     , MAX_QUEUE_SIZE(maxQueueSize)
     , FULL_POLICY(fullPolicy)
     , m_watchdogExit(false)
+    , m_watchdogAlarms(0)
+    , m_processedCount(0)
     , m_lastAliveTime(steady_clock::time_point{})
     , m_watchdogTimeout(steady_clock::duration::zero())
 {
@@ -54,6 +56,14 @@ bool Thread::CreateThread(std::optional<std::chrono::milliseconds> watchdogTimeo
         m_threadStartFuture.emplace(m_threadStartPromise->get_future());
         m_exit = false;
 
+        // Set the watchdog timeout BEFORE the worker starts. Process() reads it
+        // to choose between a timed wait (watchdog on) and an indefinite wait
+        // (watchdog off). Set any later, an idle worker could already be in the
+        // indefinite wait, never refresh m_lastAliveTime, and be reported as
+        // unresponsive although it is only idle.
+        m_lastAliveTime.store(GetNow());
+        m_watchdogTimeout.store(watchdogTimeout.value_or(milliseconds::zero()));
+
         m_thread.emplace(&Thread::Process, this);
 
         SetThreadName(m_thread->native_handle(), THREAD_NAME);
@@ -65,7 +75,6 @@ bool Thread::CreateThread(std::optional<std::chrono::milliseconds> watchdogTimeo
 
         if (watchdogTimeout.has_value())
         {
-            m_watchdogTimeout.store(watchdogTimeout.value());
             m_watchdogExit.store(false);
             m_watchdogThread.emplace(&Thread::WatchdogProcess, this);
         }
@@ -81,24 +90,15 @@ void Thread::ExitThread()
     if (!m_thread)
         return;
 
-    // Stop watchdog first so it doesn't fire during shutdown
-    if (m_watchdogThread)
-    {
-        {
-            lock_guard<mutex> lk(m_watchdogMutex);
-            m_watchdogExit.store(true);
-        }
-        m_watchdogCv.notify_one();
-        m_watchdogThread->join();
-        m_watchdogThread.reset();
-    }
-
-    // Push high-priority exit message, bypassing MAX_QUEUE_SIZE limit
-    auto exitMsg = make_shared<ThreadMsg>(MSG_EXIT_THREAD, nullptr, Priority::HIGH);
+    // Queue the exit message at the back of the LOW queue, bypassing the
+    // MAX_QUEUE_SIZE limit. Process() drains HIGH, then NORMAL, then LOW, so
+    // every message posted before ExitThread() is processed before the thread
+    // exits. Setting m_exit stops new posts and unblocks blocked producers.
+    auto exitMsg = make_shared<ThreadMsg>(MSG_EXIT_THREAD, nullptr, Priority::LOW);
     {
         lock_guard<mutex> lock(m_mutex);
         m_exit.store(true);
-        m_highQueue.push_back(exitMsg);
+        m_lowQueue.push_back(exitMsg);
         m_cv.notify_one();
         m_cvNotFull.notify_all(); // unblock any blocked producers
     }
@@ -110,6 +110,20 @@ void Thread::ExitThread()
         else
             m_thread->detach(); // called from within the thread itself
     }
+
+    // Stop the watchdog only after the worker has finished, so a worker that
+    // hangs while draining its queue on shutdown is still reported.
+    if (m_watchdogThread)
+    {
+        {
+            lock_guard<mutex> lk(m_watchdogMutex);
+            m_watchdogExit.store(true);
+        }
+        m_watchdogCv.notify_one();
+        m_watchdogThread->join();
+        m_watchdogThread.reset();
+    }
+    m_watchdogTimeout.store(steady_clock::duration::zero());
 
     {
         lock_guard<mutex> lock(m_mutex);
@@ -191,6 +205,10 @@ void Thread::PostMsg(std::shared_ptr<UserData> data, Priority priority)
         if (FULL_POLICY == FullPolicy::DROP)
             return;  // silently discard — caller is not stalled
 
+        // BLOCK from the worker thread itself would deadlock: it would wait
+        // for a slot that only it can free. Fault instead of hanging.
+        ASSERT_TRUE(this_thread::get_id() != m_thread->get_id());
+
         // BLOCK: wait until the consumer drains a slot or the thread exits
         m_cvNotFull.wait(lk, [this, &totalSize]() {
             return totalSize() < MAX_QUEUE_SIZE || m_exit.load();
@@ -222,15 +240,16 @@ void Thread::WatchdogProcess()
 
     while (true)
     {
+        // The predicate catches an exit request made before this wait began,
+        // so ExitThread() never waits out a full interval.
         unique_lock<mutex> lk(m_watchdogMutex);
-        m_watchdogCv.wait_for(lk, sleepInterval);
-
-        if (m_watchdogExit.load())
+        if (m_watchdogCv.wait_for(lk, sleepInterval, [this]() { return m_watchdogExit.load(); }))
             break;
 
         auto delta = GetNow() - m_lastAliveTime.load();
         if (delta > timeout)
         {
+            m_watchdogAlarms++;
             cerr << "Watchdog: thread '" << THREAD_NAME
                  << "' is unresponsive!" << endl;
             // Optionally trigger a hard fault: ASSERT();
@@ -346,8 +365,12 @@ void Thread::Process()
             {
                 ASSERT_TRUE(msg->GetData());
                 auto userData = msg->GetData();
-                cout << userData->msg << " " << userData->year
-                     << " on " << THREAD_NAME << endl;
+                if (m_msgHandler)
+                    m_msgHandler(userData);
+                else
+                    cout << userData->msg << " " << userData->year
+                         << " on " << THREAD_NAME << endl;
+                m_processedCount++;
                 break;
             }
 

@@ -25,6 +25,7 @@
 /// * **Debug Support:** Sets the native thread name on Windows and Linux.
 
 #include "ThreadMsg.h"
+#include "Fault.h"
 #include <thread>
 #include <deque>
 #include <mutex>
@@ -34,6 +35,7 @@
 #include <future>
 #include <optional>
 #include <chrono>
+#include <functional>
 
 struct UserData
 {
@@ -72,6 +74,8 @@ public:
     bool CreateThread(std::optional<std::chrono::milliseconds> watchdogTimeout = std::nullopt);
 
     /// Shut down the worker thread.  Safe to call from any thread.
+    /// Every message posted before this call is processed first (any
+    /// priority); PostMsg() calls made after it are discarded.
     void ExitThread();
 
     /// Get the ID of this thread instance.
@@ -89,9 +93,24 @@ public:
     /// Get the current number of messages in the queue.
     size_t GetQueueSize();
 
+    /// Number of times the watchdog has reported this thread unresponsive.
+    size_t GetWatchdogAlarmCount() const { return m_watchdogAlarms.load(); }
+
+    /// Number of user messages processed since construction.
+    size_t GetProcessedCount() const { return m_processedCount.load(); }
+
+    /// Handler invoked on the worker thread for each posted message.
+    using MsgHandler = std::function<void(std::shared_ptr<UserData>)>;
+
+    /// Set the message handler. Call before CreateThread() (or after
+    /// ExitThread()). Without one, each message is printed to std::cout.
+    void SetMsgHandler(MsgHandler handler) { ASSERT_TRUE(!m_thread); m_msgHandler = std::move(handler); }
+
     /// Post a message to the worker thread.
     /// If back pressure is enabled and the queue is full, this call blocks
-    /// until space is available or ExitThread() is called.
+    /// until space is available or ExitThread() is called. Posting to a full
+    /// queue with FullPolicy::BLOCK from the worker thread itself faults, since
+    /// it would wait for a slot that only it can free.
     /// @param msg       Message data.
     /// @param priority  Processing priority (default: NORMAL).
     void PostMsg(std::shared_ptr<UserData> msg, Priority priority = Priority::NORMAL);
@@ -123,6 +142,7 @@ private:
 
     const std::string THREAD_NAME;
     const size_t MAX_QUEUE_SIZE;
+    MsgHandler m_msgHandler;
     const FullPolicy FULL_POLICY;
 
     std::optional<std::promise<void>> m_threadStartPromise;
@@ -133,6 +153,8 @@ private:
     std::mutex                                             m_watchdogMutex;
     std::condition_variable                                m_watchdogCv;
     std::atomic<bool>                                      m_watchdogExit;
+    std::atomic<size_t>                                    m_watchdogAlarms;
+    std::atomic<size_t>                                    m_processedCount;
     std::atomic<std::chrono::steady_clock::time_point>     m_lastAliveTime;
     std::atomic<std::chrono::steady_clock::duration>       m_watchdogTimeout;
 };

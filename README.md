@@ -20,6 +20,7 @@ A worker thread with an event loop, priority message queue, back pressure, and w
 - [Back Pressure](#back-pressure)
 - [Watchdog](#watchdog)
 - [Usage](#usage)
+- [Unit Tests](#unit-tests)
 - [Portable C/C++ Libraries](#portable-cc-libraries)
 - [References](#references)
 - [Conclusion](#conclusion)
@@ -31,7 +32,7 @@ A worker thread with an event loop, priority message queue, back pressure, and w
 1. Clone the repository.
 2. From the repository root, run the following CMake command:
    `cmake -B Build .`
-3. Build and run the project within the `Build` directory.
+3. Build and run the project within the `Build` directory. `StdWorkerThreadApp` runs the feature demos in `main.cpp`, then the unit tests in `UnitTests.cpp`, and exits non-zero if a test fails.
 
 # Introduction
 
@@ -67,12 +68,19 @@ public:
 
     std::string GetThreadName();
     size_t GetQueueSize();
+    size_t GetWatchdogAlarmCount() const;
+    size_t GetProcessedCount() const;
+
+    using MsgHandler = std::function<void(std::shared_ptr<UserData>)>;
+    void SetMsgHandler(MsgHandler handler);
 
     void PostMsg(std::shared_ptr<UserData> msg, Priority priority = Priority::NORMAL);
 };
 ```
 
 `Thread` uses `std::optional<std::thread>` internally, which allows the thread handle to be cleanly reset between `CreateThread()` and `ExitThread()` calls without requiring heap allocation.
+
+`SetMsgHandler()`, called before `CreateThread()`, sets the function the worker thread calls for each message. Without one, each message is printed to `std::cout`. The unit tests use it to run test code on the worker thread.
 
 `CreateThread()` uses `std::promise` and `std::future` to guarantee the worker thread has entered its event loop before returning, so callers can safely post messages immediately after creation.
 
@@ -168,8 +176,12 @@ void Thread::Process()
             case MSG_POST_USER_DATA:
             {
                 auto userData = msg->GetData();
-                cout << userData->msg << " " << userData->year
-                     << " on " << THREAD_NAME << endl;
+                if (m_msgHandler)
+                    m_msgHandler(userData);
+                else
+                    cout << userData->msg << " " << userData->year
+                         << " on " << THREAD_NAME << endl;
+                m_processedCount++;
                 break;
             }
             case MSG_EXIT_THREAD:
@@ -200,6 +212,9 @@ void Thread::PostMsg(std::shared_ptr<UserData> data, Priority priority)
         if (FULL_POLICY == FullPolicy::DROP)
             return;  // silently discard — caller is not stalled
 
+        // BLOCK from the worker thread itself would deadlock
+        ASSERT_TRUE(this_thread::get_id() != m_thread->get_id());
+
         m_cvNotFull.wait(lk, [this, &totalSize]() {
             return totalSize() < MAX_QUEUE_SIZE || m_exit.load();
         });
@@ -219,7 +234,7 @@ void Thread::PostMsg(std::shared_ptr<UserData> data, Priority priority)
 }
 ```
 
-`ExitThread()` pushes a `MSG_EXIT_THREAD` message at `Priority::HIGH`, sets the exit flag inside the lock, and notifies both the consumer and any blocked producers before joining the thread.
+`ExitThread()` pushes a `MSG_EXIT_THREAD` message to the back of the `Priority::LOW` queue, sets the exit flag inside the lock, and notifies both the consumer and any blocked producers before joining the thread. Because the exit message is the last one in priority order, every message posted before `ExitThread()`, at any priority, is processed before the thread exits; `PostMsg()` calls made after it are discarded. The watchdog is stopped only after the join, so a thread that hangs while draining on shutdown is still reported.
 
 # Priority Queue
 
@@ -251,6 +266,8 @@ Thread workerThread2("MyThread", 5, FullPolicy::DROP); // DROP policy enabled
 
 When no limit is needed, pass `0` (the default) for `maxQueueSize` and `PostMsg()` never blocks or drops.
 
+With `BLOCK`, a worker thread must not post to its own full queue: it would wait for a slot that only it can free, so `PostMsg()` faults (`ASSERT_TRUE`) instead of deadlocking. Size the queue for self-posts, or use `DROP` on a thread that posts to itself.
+
 During shutdown `ExitThread()` sets the exit flag inside the lock and calls `m_cvNotFull.notify_all()`, ensuring any thread blocked in `PostMsg()` unblocks immediately rather than waiting for queue space that will never arrive.
 
 # Watchdog
@@ -272,14 +289,13 @@ void Thread::WatchdogProcess()
     while (true)
     {
         unique_lock<mutex> lk(m_watchdogMutex);
-        m_watchdogCv.wait_for(lk, sleepInterval);
-
-        if (m_watchdogExit.load())
+        if (m_watchdogCv.wait_for(lk, sleepInterval, [this]() { return m_watchdogExit.load(); }))
             break;
 
         auto delta = GetNow() - m_lastAliveTime.load();
         if (delta > timeout)
         {
+            m_watchdogAlarms++;
             cerr << "Watchdog: thread '" << THREAD_NAME
                  << "' is unresponsive!" << endl;
         }
@@ -287,56 +303,81 @@ void Thread::WatchdogProcess()
 }
 ```
 
-If the timestamp goes stale — because the thread is stuck inside a message handler (deadlock, infinite loop, etc.) — the watchdog logs an error. In a production system the watchdog callback can be extended to trigger a controlled shutdown or system reset. The watchdog exits promptly when `ExitThread()` is called by signalling `m_watchdogCv` directly rather than waiting for the next sleep to expire.
+If the timestamp goes stale — because the thread is stuck inside a message handler (deadlock, infinite loop, etc.) — the watchdog logs an error. In a production system the watchdog callback can be extended to trigger a controlled shutdown or system reset. The watchdog exits promptly when `ExitThread()` is called by signalling `m_watchdogCv` directly rather than waiting for the next sleep to expire; the wait's predicate also catches an exit request made before the wait began. `GetWatchdogAlarmCount()` returns how many alarms have been raised.
+
+`CreateThread()` stores the watchdog timeout *before* starting the worker. The worker reads it to choose a timed or an indefinite queue wait; stored after the worker has started, an idle worker could already be in the indefinite wait, never refresh its timestamp, and be reported as unresponsive although it is only idle. `UnitTests.cpp` covers this case, an exited or re-created thread, and a stalled thread that must be reported.
 
 # Usage
 
-The `main()` function below shows how to use the `Thread` class. Three threads are created to demonstrate the priority queue, back pressure, and watchdog features respectively.
+The `main()` function below, from `main.cpp`, demonstrates each feature with its own thread, then runs the unit tests.
 
 ```cpp
-// WorkerThread1 — unlimited queue, priority demo
-// WorkerThread2 — back pressure enabled (max 5 queued messages)
-// WorkerThread3 — watchdog enabled (2-second timeout)
-Thread workerThread1("WorkerThread1");
-Thread workerThread2("WorkerThread2", 5);
-Thread workerThread3("WorkerThread3");
-
 int main(void)
 {
-    workerThread1.CreateThread();
-    workerThread2.CreateThread();
-    workerThread3.CreateThread(std::chrono::milliseconds(2000));
+    Thread priorityThread("PriorityThread");                    // unlimited queue
+    Thread blockThread("BlockThread", 5);                       // max 5 queued, BLOCK
+    Thread dropThread("DropThread", 5, FullPolicy::DROP);       // max 5 queued, DROP
+    Thread watchdogThread("WatchdogThread");                    // watchdog enabled
+    Thread timerThread("TimerThread");                          // fed by a timer
 
-    // Priority queue demo — LOW posted first, HIGH processed first
-    auto lowData = make_shared<UserData>("Low priority msg", 2026);
-    workerThread1.PostMsg(lowData, Priority::LOW);
+    // CreateThread() returns once the thread is running, so posting right away is safe
+    priorityThread.CreateThread();
+    blockThread.CreateThread();
+    dropThread.CreateThread();
+    watchdogThread.CreateThread(milliseconds(2000));
+    timerThread.CreateThread();
 
-    auto normalData = make_shared<UserData>("Normal priority msg", 2026);
-    workerThread1.PostMsg(normalData, Priority::NORMAL);
+    // Posted LOW, NORMAL, HIGH; usually processed HIGH, NORMAL, LOW (the worker
+    // may take the first message before the others are queued)
+    cout << "\n-- Priority --" << endl;
+    priorityThread.PostMsg(Msg("Low priority msg"), Priority::LOW);
+    priorityThread.PostMsg(Msg("Normal priority msg"), Priority::NORMAL);
+    priorityThread.PostMsg(Msg("High priority msg"), Priority::HIGH);
 
-    auto highData = make_shared<UserData>("High priority msg", 2026);
-    workerThread1.PostMsg(highData, Priority::HIGH);
-
-    // Back pressure demo — blocks main when queue is full
+    // 10 messages into a queue of 5: PostMsg() blocks until a slot frees up
+    cout << "\n-- Back pressure (BLOCK, max 5) --" << endl;
     for (int i = 1; i <= 10; i++)
-    {
-        auto data = make_shared<UserData>("Back pressure message #" + to_string(i), 2026);
-        workerThread2.PostMsg(data);
-    }
+        blockThread.PostMsg(Msg("Back pressure message #" + to_string(i)));
 
-    // Watchdog demo — healthy thread, watchdog should not fire
-    auto wdData = make_shared<UserData>("Watchdog-monitored message", 2026);
-    workerThread3.PostMsg(wdData);
+    // 10 messages into a queue of 5: once full, PostMsg() discards and returns
+    cout << "\n-- Back pressure (DROP, max 5) --" << endl;
+    for (int i = 1; i <= 10; i++)
+        dropThread.PostMsg(Msg("Drop message #" + to_string(i)));
 
-    this_thread::sleep_for(chrono::milliseconds(500));
+    // A healthy thread: the 2s watchdog stays silent. A handler that runs past
+    // the timeout is reported (see Watchdog_StalledThreadReported in UnitTests.cpp).
+    cout << "\n-- Watchdog (2000ms) --" << endl;
+    watchdogThread.PostMsg(Msg("Watchdog-monitored message"));
 
-    workerThread1.ExitThread();
-    workerThread2.ExitThread();
-    workerThread3.ExitThread();
+    // A std::thread "timer" posts a LOW priority message every 250ms
+    cout << "\n-- Timer (250ms) --" << endl;
+    atomic<bool> timerExit(false);
+    thread timer([&]() {
+        while (!timerExit)
+        {
+            this_thread::sleep_for(milliseconds(250));
+            if (!timerExit)
+                timerThread.PostMsg(Msg("Timer expired"), Priority::LOW);
+        }
+    });
+    this_thread::sleep_for(milliseconds(1000));
+    timerExit = true;
+    timer.join();   // stop posting before ExitThread()
 
-    return 0;
+    // ExitThread() processes everything still queued, then joins
+    priorityThread.ExitThread();
+    blockThread.ExitThread();
+    dropThread.ExitThread();
+    watchdogThread.ExitThread();
+    timerThread.ExitThread();
+
+    return RunUnitTests() == 0 ? 0 : 1;
 }
 ```
+
+# Unit Tests
+
+`UnitTests.cpp` tests priority order (across and within levels), `FullPolicy` (`DROP` drops and never stalls the producer; `BLOCK` delivers everything by stalling it; `ExitThread()` releases a blocked producer), `ExitThread()` draining the queue and re-creating the thread, and the watchdog (an idle, exited or re-created thread isn't reported; a stalled one is). They are adapted from the [DelegateMQ](https://github.com/DelegateMQ/DelegateMQ) `std::thread` port's tests. Each test uses a local `Thread` with `SetMsgHandler()`, and failures are counted rather than aborting, so every test runs.
 
 # Portable C/C++ Libraries
 
